@@ -175,7 +175,186 @@ AWOV::~AVOV(){}
 
 * **polymorphic base class应该声明一个virtual析构函数，如果class带有任何virtual函数，他就应该拥有一个virtual析构函数。**
 
-* **class的设计目的如果不是作为base class使用，或者不是为了具备polymorphically，就不应该声明virtual析构函数。
+* **class的设计目的如果不是作为base class使用，或者不是为了具备polymorphically，就不应该声明virtual析构函数。**
 
+## 08、别让异常逃离析构函数
 
+C++并不禁止析构函数吐出异常，但它并不推荐这样做。析构函数吐出异常，程序可能过早结束或产生不明确行为。
 
+该怎么办呢？举个例子，假如使用一个class负责数据库连接：
+
+```cpp
+class DBConnection {
+public:
+    ...
+    static DBConnection create();
+
+    void close(); //关闭联机，失败则抛出异常
+};
+```
+
+为确保客户不忘记在DBConnection对象身上调用close(),一个合理的想法是创建一个用来管理DBConnection资源的class。
+
+```cpp
+class DBConn {
+public:
+    ...
+    ~DBConn()
+    {
+        db.close();
+    }
+private:
+    DBConnection db;
+}
+```
+
+客户可以写如下的代码：
+
+```cpp
+{
+    DBConn dbc(DBConnection::create());
+    ...
+}
+```
+
+如果该调用导致异常，DBConn析构函数会传播该异常，也就是允许它离开这个析构函数，会造成问题。
+
+两个办法可以避免这个问题：
+
+1. 抛出异常就结束程序：
+
+```cpp
+DBConn::~DBConn()
+{
+    try{db.close();}
+    catch(...) {
+        制作运转记录，记下对close的调用失败；
+        std::abort();
+    }
+}
+```
+
+强迫结束程序是一个合理的选项，可以阻止异常从析构程序传播出去
+
+2. 吞下异常：
+
+```cpp
+DBConn::~DBConn()
+{
+    try{db.close();}
+    catch(...) {
+        制作运转记录，记下对close的调用失败；
+    }
+}
+```
+
+一般而言，吞下异常是个坏主意。
+
+一个较佳的策略是重新设计DBConn接口，使其客户有机会对可能出现的问题作出反应。例如DBConn自己创建一个close()函数，赋予客户一个机会处理“因该操作而发生的异常”。DBConn也可以追踪其管理的DBConnection对象是否被关闭，如果未被关闭则在析构函数中关闭，然而如果DBConnection析构函数调用失败；仍将退回上两个套路。
+
+```cpp
+class DBConn {
+public:
+    ...
+    void close()
+    {
+        db.close();
+        closed = true;
+    }
+
+    ~DBConn()
+    {
+        if(!closed){
+            try{
+                db.close();
+            }
+            catch(...){
+                制作运转记录，记下对closed的调用失败；
+                ...
+            }
+        }
+    }
+private:
+    DBConnection db;
+    bool closed;
+}
+```
+
+* **析构函数绝不要吐出任何异常，如果一个被析构函数调用的函数可能抛出异常，析构函数应该捕捉任何异常，然后吞下它们（不传播）或结束程序。**
+
+* **如果客户需要对某个操作函数运行期间抛出的异常做出反应，那么class应该提供一个普通函数（而不是在析构函数中）执行该操作。**
+
+## 09、绝不在构造和析构过程中调用virtual函数
+
+重点：你不该在构造函数和析构函数中调用virtual函数，这样调用不会带来预想的结果，这是c++与java或者c#不相同的一个地方。
+
+假设一个class继承体系，模拟股市交易买进、卖出订单等。这样的交易一定经过审计，所以没创建一个交易对象，在审计日志中也需要创建一笔适当的记录。
+
+```cpp
+class Transaction {
+public:
+    Transaction();
+    virtual void logTransaction() const = 0; //加const不改变类的数据成员
+
+    ...
+};
+
+Transaction::Transaction()
+{
+    ...
+    logTransaction();
+}
+
+class BuyTransaction: public Transaction{
+public:
+    virtual void logTransaction() const;
+    ...
+};
+
+class SellTransaction: public Transaction {
+public:
+    virtual void logTransaction() const;
+    ...
+};
+```
+
+现在，当一下被执行，会发生什么事：
+
+```cpp
+BuyTransaction b;
+```
+
+在创建derived class之前，会先构造base class，也就是执行base class的构造函数，这时derived class的对象还未生成，所以执行base class时调用的虚函数是base class内的虚函数，如果是纯虚函数，会有编译器或连接器的报错，但如果是普通虚函数，则会调用base class内的版本。能够避免此问题的唯一做法是：**确定你的构造和析构函数都没有在对象被创建和销毁期间调用virtual函数，而他们所调用的所有函数都服从这一约束。**
+
+一种解决方案是将logTransaction函数改为non-virtual，然后要求derived class构造函数传递必要信息给Transaction构造函数：
+
+```cpp
+class Transaction {
+public:
+    explicit Transaction(const std::string& logInfo);
+    void logTransaction(const std::string& logInfo) const;
+    ...
+};
+
+Transaction::Transaction(const std::string& logInfo)
+{
+    ...
+    logTransaction(logInfo);
+}
+
+class BuyTransaction: public Transaction {
+public:
+    BuyTransaction(parameters)
+    : Transaction(createLogString(parameters)) //将log信息传递给base class构造函数
+    {...}
+    ...
+private:
+    static std::string createLogString(parameters);
+};
+```
+
+换句话说，你无法使用virtual函数从base class向下调用，但可以另derived class将必要的构造信息向上传递至base class构造函数来代替。
+
+注意本例的createLogString函数，比起在成员初值列内给予base class所需的数据，利用辅助函数创建一个值给base class往往更加方便，也比较可读。另此函数为static，避免意外调用未初始化的derived class成员
+
+* **在构造和析构期间不要调用virtual函数，因为这类调用不会下降至derived class（比起当前执行构造函数和析构函数的那层）。**
