@@ -358,3 +358,241 @@ private:
 注意本例的createLogString函数，比起在成员初值列内给予base class所需的数据，利用辅助函数创建一个值给base class往往更加方便，也比较可读。另此函数为static，避免意外调用未初始化的derived class成员
 
 * **在构造和析构期间不要调用virtual函数，因为这类调用不会下降至derived class（比起当前执行构造函数和析构函数的那层）。**
+
+## 10、令`operator=`返回一个reference to `*this`
+
+关于赋值，你可以把它们写成连锁形式：
+
+```cpp
+int x, y, z;
+x = y = z = 5;
+```
+
+赋值采用右结合律，以上被解析为：
+
+```cpp
+x = (y = (z = 5));
+```
+
+为了实现连锁复制，赋值操作必须返回一个reference指向操作符的左侧实参，这是为classes实现赋值操作应该遵守的协议：
+
+```cpp
+class Widget {
+public:
+    ...
+    Widget& operator=(const Widget& rhs) //返回类型是reference，指向当前对象。
+    {
+        ...
+        return *this; //返回左侧对象
+    }
+    ...
+};
+```
+
+这个协议不仅适用于以上的标准赋值形式，也适用于所以相关复制运算，例如：
+
+```cpp
+class Widget {
+public:
+    ...
+    Widget& operator+=(const Widget& rhs) //这个协议适用于+=、*=等
+    {
+        ...
+        return *this;
+    }
+
+    Widget& operator=(int rhs) //此函数也适用，即使此操作符的参数类型不符合协定
+    {
+        ...
+        return *this;
+    }
+    ...
+};
+```
+
+## 11、在`operator=`中处理“自我赋值”
+
+“自我赋值”发生在对象被赋值给自己时：
+
+```cpp
+class Widget {...}'
+Widget w;
+...
+w = w;
+```
+
+自我赋值并不总是被一眼看出来，例如：
+
+```cpp
+a[i] = a[j];
+*px = *py;
+```
+
+这些不明显的自我赋值是 别名 带来的结果。实际上两个对象只要来自同一个继承体系，它们甚至不需要被声明为相同类型。
+
+如果你尝试自行管理资源，就可能造成在停止使用资源前意外释放了它。假设建立一个class用来保存一个指针指向一块动态分配的位图（bitmap）：
+
+```cpp
+class Bitmap {...};
+class Widget {
+    ...
+private:
+    Bitmap* pb;
+};
+```
+
+下面是operator=的实现代码，表面上看起来合理，但自我赋值时并不安全：
+
+```cpp
+Widget& Widget::operator=(const Widget& this)
+{
+    delete pb;
+    pb = new Bitmap(*rhs.pb);
+    return *this;
+}
+
+当rhs是自身是，它会释放自身的pb，且持有一个指针指向已删除的对象。
+
+传统做法是在最前面给加一个证同测试：
+
+```cpp
+Widget& Widget::operator=(const Widget &rhs){
+    if(&rhs == this)
+        return *this;
+
+    delete pb;
+    pb = new Bitmap(*rhs.pb);
+    return this;
+}
+```
+
+然而，这个版本不具备“异常安全性”，如果`new Bitmap`出现异常，pb仍会指向一块被删除的内存。
+
+解决方法是复制pb所指东西时别删除pb：
+
+```cpp
+Widget& Widget::operator=(const Widget& rhs){
+    Bitmap* tmp = pb;
+    pb = new Bitmap(*rhs.pb);
+    delete tmp;
+    return *this;
+}
+```
+
+如果担心效率，可以把证同测试放到函数起始处，但是证同测试同样需要成本，所以需要估计自我赋值发生的频率有多高。
+
+另一种方法是使用copy and swap技术：
+
+```cpp
+class Widget {
+    ...
+    void swap(Widget& rhs); //交换*this和rhs的数据
+    ...
+};
+
+Widget& Widget::operator=(const Widget& rhs){
+    Widget temp(rhs); //为rhs数据制作一份副本
+    swap(temp); //将*this数据和上述副本的数据交换
+    return *this
+}
+```
+
+另一个方法利用一下两个因素：（1）某class的copy assignment操作符可能被声明为以by value的方式接受实参 （2）以by value的方式传递会自动生成副本。
+
+```cpp
+Widget& Widget::operator=(Widget rhs) //注意这里是pass by value
+{
+    swap(rhs);
+    return *this;
+}
+```
+
+这种方法为了巧妙牺牲了清晰性，然而，将coping动作从函数本体内移到“函数参数构造阶段”又是可令编译器生成更高效的代码。
+
+## 12、复制对象时勿忘其每一个成分
+
+如果自己生成copying函数，需要注意。
+
+考虑一个class用来表现顾客，其中手写copying函数，外界对它的调用会被日志记下来：
+
+```cpp
+void logCall(const std::string& funcName);
+class Customer {
+public:
+    ...
+    Customer(const Customer& rhs);
+    Costomer& operator=(const Customer& rhs);
+    ...
+private:
+    std::string name;
+};
+
+Customer::Customer(const Customer& rhs)
+    : name(rhs.name)
+{
+    logCall("...");
+}
+
+Customer& Customer::operator=(const Customer& rhs)
+{
+    logCall("...");
+    name = rhs.name;
+    return *this;
+}
+```
+
+当一个新的变量被添加，它并不会被复制，且也不会被编译器警告。
+
+而一旦发生继承，会有另一个问题：
+
+```cpp
+class PriorityCustomer : public Customer {
+public:
+    ...
+    PriorityCustomer(const PriorityCustomer& rhs);
+    PriorityCustomer& operator=(const PriorityCustomer& rhs)
+    ...
+private:
+    int priority;
+};
+
+PriorityCustomer::PriorityCustomer(const PriorityCustomer$ rhs)
+ : priority(rhs.priority)
+{
+    ...
+}
+...
+```
+
+上面构造函数只复制了子类的成员变量，但base class的成员变量均没有复制，这些变量会被Customer的默认构造函数赋值。
+
+所以，应该让divided class调用相应base class的函数：
+
+```cpp
+PriorityCustomer::PriorityCustomer(const PriorityCustomer$ rhs)
+ :  Customer(rhs) //调用base class的构造函数
+    priority(rhs.priority)
+{
+    ...
+}
+
+PriorityCustomer& PriorityCustomer::operator=(const PriorityCustomer& rhs)
+{
+    logCall();
+    Customer::operator=(rhs); //对base class 成分进行赋值动作
+    priority = rhs.priority;
+    return *this;
+}
+```
+
+当你编写一个copying函数，请确保：
+
+1. 复制所有local成员变量
+2. 调用所有base class的适当copying函数
+
+不应该令copy assignment操作符调用copy构造函数。也不应该令copy构造函数调用copy assignment操作符。
+
+当copy构造函数和copy assignment操作符有相同的代码，通常的做法是建立一个新的成员函数给两者调用。这样的函数往往是private的且常被命名为init。
+
+* **copying函数应该确保复制对象内所有成员变量及所有base class成分。**
+* **不要尝试用某个copying函数实现另一个copying函数。应该将共同机能放在第三个函数中，并由两个copying函数共同调用。**

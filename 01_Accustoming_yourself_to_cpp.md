@@ -1,8 +1,8 @@
 # 让自己习惯C++
 
-## 01.视c++为一个语言联邦
+## 01、视c++为一个语言联邦
 
-## 02.尽量以`const`、`enum`、`inline`代替`#define`
+## 02、尽量以`const`、`enum`、`inline`代替`#define`
 
 或者说以编译器替换预处理器
 
@@ -111,7 +111,7 @@ inline void callWithMax(const T& a, const T& b){
 
 * **对于形似函数的宏（macros），最好用inline函数替换`#define`。**
 
-## 02.尽可能使用`const`
+## 03、尽可能使用`const`
 
 如果关键字`const`出现在星号左边，说明被指物是常量，如果出现在星号右边，说明指针是常量。如果出现在两边，说明都是常量。
 
@@ -260,7 +260,7 @@ private:
 
 * 当const和non-const成员函数有着实质等价的实现时，令non-const版本调用const版本可避免代码重复。
 
-## 确定对象被使用前已经初始化
+## 04、确定对象被使用前已经初始化
 
 array不保证其内容被初始化，vector能够保证。
 
