@@ -372,4 +372,102 @@ const Rational operator*(const Rational& lhs, const Rational& rhs){
 
 当Rational成为一个template而不是class，又会带来一些新争议、新解法以及新的设计牵连，见条款46。
 
-* **如果你需要为某个函数的所有参数（包括this指针指向的那个隐含参数）进行类型转换，那么这个函数必须是non-member。
+* **如果你需要为某个函数的所有参数（包括this指针指向的那个隐含参数）进行类型转换，那么这个函数必须是non-member。**
+
+## 25、考虑写出一个不抛异常的swap函数
+
+标准程序库提供了缺省的swap：
+
+```cpp
+namespace std {
+    template<typename T>
+    void swap(T& a, T& b)
+    {
+        T temp(a);
+        a = b;
+        b = temp;
+    }
+}
+```
+
+某些情况而言，这个缺省swap效率很低。
+
+### 解决方法
+
+1. 提供一个public swap成员函数，让他高效地置换你的类型的两个对象值。且这个函数绝不该抛出异常。
+
+2. 在你的class或template所在的命名空间内提供一个non-member swap，并令它调用上述swap成员函数。
+
+3. 如果你正在编写一个class（而非class template），为你的class特化std::swap。并令它调用swap函数。
+
+```cpp
+class Widget {
+public:
+    void swap(Widget& other)
+    {
+        using std::swap;
+        swap(pImpl, other.pImpl); //交换两个需要交换的指针
+    }
+};
+
+namespace std {
+    templete<>
+    void swap<Widget>(Widget& a, Widget& b) //依然不很合理，理由见下
+    {
+        a.swap(b);
+    }
+}
+```
+
+然而，如果Widget是一个class template，并不能这样写，这是不合法的：
+
+```cpp
+void swap< Widget<T> > (Widget<T>& a, Widget<T>& b);
+```
+
+简单的办法是在std内添加一个重载版本：
+
+```cpp
+using namespace std {
+    template<Typename T>
+    void swap(Widget<T>& a, Widget<T>& b){
+        a.swap(b);
+    }
+}
+```
+
+然而，这也不合法，std禁止我们膨胀那些已经声明好的。解决方法依然是声明一个non-member swap。但是不再声明为std::swap的特化版或重载版本。
+
+```cpp
+namespace WidgetStuff {
+    ...
+    template<typename T>
+    class Widget {...};
+
+    template<typename T>
+    void swap(Widget<T>& a, Widget<T>& b){
+        a.swap(b);
+    }
+}
+```
+
+从客户的角度看，使用方法：
+
+```cpp
+template<typename T>
+void doSomething(T& obj1, T& obj2)
+{
+    using std::swap; //令std::swap再此函数内可用
+    ...
+    swap(obj1, obj2);
+    ...
+}
+```
+
+如果T是Widget并位于WidgetStuff内，则会找到WidgetStuff内的swap，否则使用std::swap。
+
+需要注意的是，不要添加额外的修饰符：
+
+```cpp
+std::swap(obj1, obj2); //这是错误的
+```
